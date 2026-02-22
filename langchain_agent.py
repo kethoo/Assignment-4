@@ -1,11 +1,16 @@
-from datetime import datetime
+"""
+Part 4 (Optional): LangChain Agent Implementation
+==================================================
+Re-implements the research agent using LangChain for comparison.
+Compatible with LangChain 1.x+
+"""
+
+import math
 from langchain_anthropic import ChatAnthropic
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.memory import ConversationBufferMemory
-import math
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from dotenv import load_dotenv
+load_dotenv()
 
 
 
@@ -80,52 +85,75 @@ def lc_get_weather(city: str) -> str:
 
 
 
-# LangChain Agent Setup
+# LangChain 1.x Agent Setup (manual loop)
+
+
+TOOLS = [lc_calculator, lc_web_search, lc_get_weather]
+TOOL_MAP = {t.name: t for t in TOOLS}
+
+SYSTEM = """You are a helpful research assistant with access to tools.
+Use tools when needed to provide accurate, up-to-date information.
+Be concise but thorough. If a question doesn't need tools, answer directly."""
 
 
 def create_langchain_agent(temperature: float = 0.3):
     """
-    Build a LangChain agent with:
-    - Claude as the LLM backbone
-    - 3 tools: calculator, web_search, get_weather
-    - Conversation memory for multi-turn dialogue
+    Build a LangChain 1.x compatible agent.
+    Uses bind_tools() to attach tools to the model.
+    Returns (llm_with_tools, chat_history)
     """
     llm = ChatAnthropic(
         model="claude-sonnet-4-6",
         temperature=temperature,
         max_tokens=2048,
     )
+    llm_with_tools = llm.bind_tools(TOOLS)
+    return llm_with_tools
 
-    tools = [lc_calculator, lc_web_search, lc_get_weather]
 
-    # Prompt with system message and chat history placeholder
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a helpful research assistant with access to tools.
-Use tools when needed to provide accurate, up-to-date information.
-Be concise but thorough. If a question doesn't need tools, answer directly."""),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
+def run_agent_turn(llm_with_tools, history: list, user_input: str, verbose: bool = True) -> str:
+    """
+    Run one conversational turn with tool-calling loop.
+    Appends messages to history for memory across turns.
+    """
+    history.append(HumanMessage(content=user_input))
 
-    # Create tool-calling agent
-    agent = create_tool_calling_agent(llm, tools, prompt)
+    if verbose:
+        print(f"\nHuman: {user_input}")
 
-    # Wrap with executor (handles the tool loop)
-    memory = ConversationBufferMemory(
-        memory_key="chat_history",
-        return_messages=True,
-    )
+    iteration = 0
+    while iteration < 8:
+        iteration += 1
+        messages = [SystemMessage(content=SYSTEM)] + history
+        response = llm_with_tools.invoke(messages)
 
-    executor = AgentExecutor(
-        agent=agent,
-        tools=tools,
-        memory=memory,
-        verbose=True,       # Shows tool calls in console
-        max_iterations=8,
-        handle_parsing_errors=True,
-    )
-    return executor
+        history.append(response)
+
+        # If no tool calls, we're done
+        if not response.tool_calls:
+            if verbose:
+                print(f"Agent: {response.content}")
+            return response.content
+
+        # Execute tool calls
+        for tc in response.tool_calls:
+            tool_name = tc["name"]
+            tool_args = tc["args"]
+
+            if verbose:
+                print(f"  → Tool: {tool_name}({tool_args})")
+
+            if tool_name in TOOL_MAP:
+                result = TOOL_MAP[tool_name].invoke(tool_args)
+            else:
+                result = f"Unknown tool: {tool_name}"
+
+            if verbose:
+                print(f"  ← Result: {str(result)[:150]}")
+
+            history.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+
+    return "Max iterations reached."
 
 
 
@@ -141,7 +169,8 @@ def run_conversation():
     print("LANGCHAIN CONVERSATIONAL AGENT DEMO")
     print("="*60)
 
-    agent = create_langchain_agent(temperature=0.4)
+    llm_with_tools = create_langchain_agent(temperature=0.4)
+    history = []  # Shared history = memory
 
     turns = [
         "What is 15 * 24 + sqrt(625)?",
@@ -152,9 +181,7 @@ def run_conversation():
 
     for i, question in enumerate(turns, 1):
         print(f"\n--- Turn {i} ---")
-        print(f"Human: {question}")
-        result = agent.invoke({"input": question})
-        print(f"Agent: {result['output']}")
+        run_agent_turn(llm_with_tools, history, question)
 
 
 if __name__ == "__main__":

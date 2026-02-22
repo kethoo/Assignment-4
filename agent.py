@@ -8,7 +8,8 @@ from datetime import datetime
 import anthropic
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from pydantic import BaseModel, Field, ValidationError
-
+from dotenv import load_dotenv
+load_dotenv()
 
 # Structured Output Schemas
 
@@ -352,8 +353,10 @@ After gathering information, write a comprehensive research report as structured
     try:
         # Strip any markdown code fences if present
         cleaned = raw_answer.strip()
-        if cleaned.startswith("```"):
-            cleaned = "\n".join(cleaned.split("\n")[1:-1])
+        if "```json" in cleaned:
+            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+        elif "```" in cleaned:
+            cleaned = cleaned.split("```")[1].split("```")[0].strip()
 
         data = json.loads(cleaned)
         # Inject tools_used if not already present
@@ -384,7 +387,7 @@ After gathering information, write a comprehensive research report as structured
 # Part 1: Decoding Parameter Experiments
 
 
-def experiment_temperatures(prompt: str = "Describe quantum computing in one sentence."):
+def experiment_temperatures(prompt: str = "Write a creative opening line for a sci-fi novel."):
     """
     Demonstrate how temperature affects LLM output diversity and creativity.
     Runs same prompt at temperatures 0.0, 0.5, 1.0 and compares outputs.
